@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>會計主任代理輪值查詢系統</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <style>
+        :root {
+            --bg-color: #f8f9fa;
+            --card-bg: #ffffff;
+            --text-main: #333333;
+            --text-sub: #666666;
+            --border-color: #dddddd;
+            --accent-blue: #4a69bd;
+            --tag-true-bg: #eafaf1;
+            --tag-true-text: #2d6a4f;
+            --tag-false-bg: #fff0f0;
+            --tag-false-text: #a4161a;
+        }
+
+        body { font-family: "PingFang TC", "Microsoft JhengHei", sans-serif; background-color: var(--bg-color); color: var(--text-main); margin: 0; padding: 20px; line-height: 1.6; }
+        .container { max-width: 1000px; margin: auto; }
+        header { text-align: center; margin-bottom: 30px; border-bottom: 2px solid #444; padding-bottom: 10px; }
+        
+        /* 上傳區 */
+        .upload-box { background: var(--card-bg); padding: 20px; border: 1px dashed var(--border-color); border-radius: 8px; text-align: center; margin-bottom: 25px; }
+        
+        /* 兩線佈局 */
+        .grid-layout { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+        @media (max-width: 768px) { .grid-layout { grid-template-columns: 1fr; } }
+
+        .route-section { background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 8px; padding: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+        .route-title { font-size: 1.25rem; font-weight: bold; margin-top: 0; border-left: 5px solid var(--accent-blue); padding-left: 10px; margin-bottom: 15px; }
+
+        /* 優先代理人區塊 */
+        .priority-result { background: #f0f4f8; padding: 15px; border-radius: 6px; margin-bottom: 15px; border: 1px solid #d1d9e6; }
+        .priority-label { font-size: 0.9rem; color: var(--text-sub); margin-bottom: 5px; }
+        .priority-name { font-size: 1.4rem; font-weight: bold; color: var(--accent-blue); }
+        .emergency-alert { color: var(--tag-false-text); font-weight: bold; font-size: 0.9rem; display: block; margin-bottom: 5px; }
+
+        /* 名單列表 */
+        .staff-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+        .staff-table td { padding: 8px 5px; border-bottom: 1px solid #eee; }
+        
+        /* 標籤 */
+        .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
+        .badge-true { background: var(--tag-true-bg); color: var(--tag-true-text); }
+        .badge-false { background: var(--tag-false-bg); color: var(--tag-false-text); }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <header><h1>會計主任代理輪值名單</h1></header>
+
+    <div class="upload-box">
+        <p>請選擇背景 Excel 原始檔進行更新</p>
+        <input type="file" id="input-excel" accept=".xlsx, .xls">
+    </div>
+
+    <div class="grid-layout" id="display-area" style="display:none;">
+        <section class="route-section">
+            <div class="route-title">濁水溪線</div>
+            <div id="zhuoshui-priority"></div>
+            <table class="staff-table" id="zhuoshui-list"></table>
+        </section>
+
+        <section class="route-section">
+            <div class="route-title">烏溪線</div>
+            <div id="wu-priority"></div>
+            <table class="staff-table" id="wu-list"></table>
+        </section>
+    </div>
+</div>
+
+<script>
+    document.getElementById('input-excel').addEventListener('change', function(e) {
+        const file = e.target.files[0];
+        const reader = new FileReader();
+
+        reader.onload = function(event) {
+            const data = new Uint8Array(event.target.result);
+            const workbook = XLSX.read(data, {type: 'array'});
+
+            // 讀取兩個工作表
+            const normalSheet = workbook.Sheets['主任名單'];
+            const chiefSheet = workbook.Sheets['區主任名單'];
+
+            if (!normalSheet || !chiefSheet) {
+                alert("錯誤：找不到『主任名單』或『區主任名單』工作表！");
+                return;
+            }
+
+            const normalData = XLSX.utils.sheet_to_json(normalSheet);
+            const chiefData = XLSX.utils.sheet_to_json(chiefSheet);
+
+            // 處理兩條線
+            renderRoute('濁水溪線', normalData, chiefData);
+            renderRoute('烏溪線', normalData, chiefData);
+
+            document.getElementById('display-area').style.display = 'grid';
+        };
+        reader.readAsArrayBuffer(file);
+    });
+
+    function renderRoute(routeName, normal, chiefs) {
+        // 1. 篩選該區常規名單
+        const lineStaff = normal.filter(item => item.區域 === routeName);
+        
+        // 2. 找出優先代理人 (第一個 True)
+        const available = lineStaff.find(item => 
+            item.是否可代理 === true || 
+            String(item.是否可代理).toUpperCase() === 'TRUE' || 
+            item.是否可代理 === 1
+        );
+
+        let priorityHTML = "";
+        const targetPriorityId = routeName === '濁水溪線' ? 'zhuoshui-priority' : 'wu-priority';
+        const targetListId = routeName === '濁水溪線' ? 'zhuoshui-list' : 'wu-list';
+
+        if (available) {
+            // 常規代理成功
+            priorityHTML = `
+                <div class="priority-result">
+                    <div class="priority-label">當前優先代理人</div>
+                    <div class="priority-name">${available.姓名}</div>
+                    <small>${available.學校名稱}</small>
+                </div>`;
+        } else {
+            // 第一層皆為 False，啟動區主任
+            const chief = chiefs.find(c => c.區域 === routeName);
+            priorityHTML = `
+                <div class="priority-result" style="border-color: #e57373;">
+                    <span class="emergency-alert">● 常規代理皆不可行 (啟動區主任)</span>
+                    <div class="priority-name">${chief ? chief.姓名 : '未設定'}</div>
+                    <small>${chief ? chief.學校名稱 : '請檢查區主任名單分頁'}</small>
+                </div>`;
+        }
+
+        // 3. 渲染名單列表 (樸實色調標籤)
+        let listHTML = "";
+        lineStaff.forEach(s => {
+            const canProxy = (s.是否可代理 === true || String(s.是否可代理).toUpperCase() === 'TRUE' || s.是否可代理 === 1);
+            listHTML += `
+                <tr>
+                    <td>${s.序號 || ''}</td>
+                    <td>${s.姓名}</td>
+                    <td>${s.學校名稱}</td>
+                    <td style="text-align:right;">
+                        <span class="badge ${canProxy ? 'badge-true' : 'badge-false'}">
+                            ${canProxy ? '可代理' : '不可代理'}
+                        </span>
+                    </td>
+                </tr>`;
+        });
+
+        document.getElementById(targetPriorityId).innerHTML = priorityHTML;
+        document.getElementById(targetListId).innerHTML = listHTML;
+    }
+</script>
+
+</body>
+</html>
